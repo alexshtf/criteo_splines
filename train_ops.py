@@ -24,7 +24,7 @@ class EarlyStopping:
         return False
 
 
-class FWFM(nn.Module):
+class FwFM(nn.Module):
     def __init__(self, emb_dim: int, n_features: [int], emb_kwargs=None):
         super().__init__()
         if emb_kwargs is None:
@@ -38,6 +38,7 @@ class FWFM(nn.Module):
 
         with torch.no_grad():
             nn.init.normal_(self.r, std=1.)
+            self.r.set_(self.r.triu(1))
             nn.init.normal_(self.lin.weight, std=1.)
             for emb in self.vecs:
                 nn.init.normal_(emb.weight, std=0.01)
@@ -47,25 +48,15 @@ class FWFM(nn.Module):
         yield from self.vecs.parameters()
         yield self.r
 
-    def forward(self, fields):
-        vecs = [self.get_emb(field, vec_mod)
-                for field, vec_mod in zip(fields, self.vecs)]
+    def forward(self, idxs, weights):
+        vecs = [(emb(idx) * weight.unsqueeze(-1)).sum(-2, keepdim=True)
+                for idx, weight, emb in zip(idxs, weights, self.vecs)]
         vecs = torch.cat(vecs, dim=-2)
         r = self.r.triu(1)
 
-        lin = self.lin(vecs.flatten(-2, -1)).squeeze(-1)
+        lin = self.lin(vecs.flatten(-2, -1)).squeeze(-1)                        # <W, V>, where W is learnable
         pwise = (torch.matmul(vecs, vecs.transpose(-1, -2)) * r).sum([-1, -2])  # <V V^T, R>, R upper triangular
         return self.bias + lin + pwise
-
-    def get_emb(self, field, mod):
-        if type(field) is tuple:
-            idx, w = field
-            emb = mod(idx) * w.unsqueeze(-1)
-        else:
-            idx = field
-            emb = mod(idx)
-
-        return emb.sum(-2, keepdim=True)
 
 
 class BatchIter:

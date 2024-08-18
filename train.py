@@ -9,37 +9,22 @@ from tqdm.auto import tqdm
 
 from config import int_cols, spline_cols, cat_cols, out_train_path, out_val_path, out_test_path
 from preprocess_ops import label_path, cat_col_path, int_col_path, spline_col_path, load_tensor
-from train_ops import tqdm_len, BatchIter, FWFM, EarlyStopping
+from train_ops import tqdm_len, BatchIter, FwFM, EarlyStopping
 
 
 class CatColumnConfig:
     def __init__(self, name):
         self.name = name
 
-    def load(self, path):
-        idx, n = load_tensor(cat_col_path(path, self.name))
-        return [idx], n
-
-    def get_packer(self, idx):
-        def packer(ts):
-            return ts[idx]
-
-        return packer, 1 + idx
-
+    def load(self, path, device):
+        return load_tensor(cat_col_path(path, self.name), device=device)
 
 class IntColumnConfig:
     def __init__(self, name):
         self.name = name
 
-    def load(self, path):
-        idx, n = load_tensor(int_col_path(path, self.name))
-        return [idx.T], n
-
-    def get_packer(self, idx):
-        def packer(ts):
-            return ts[idx]
-
-        return packer, 1 + idx
+    def load(self, path, device):
+        return load_tensor(int_col_path(path, self.name), device=device)
 
 
 class SplineColumnConfig:
@@ -47,75 +32,61 @@ class SplineColumnConfig:
         self.name = name
         self.degree = degree
 
-    def load(self, path):
-        idx, weights, n = load_tensor(spline_col_path(path, self.name, self.degree))
-        return [idx, weights], n
-
-    def get_packer(self, idx):
-        def packer(ts):
-            return ts[idx], ts[1 + idx]
-
-        return packer, 2 + idx
+    def load(self, path, device):
+        return load_tensor(spline_col_path(path, self.name, self.degree), device=device)
 
 
 def load_dataset(column_configs, path, device=None):
     if device is None:
         device = torch.device('cpu')
 
-    pairs = [
-        cfg.load(path)
+    tuples = [
+        cfg.load(path, device)
         for cfg in tqdm(column_configs, desc='Loading feature columns')
     ]
-    n_features = [n for tensors, n in pairs]
-    tensors = [tensor.to(device)
-               for tensors, n in pairs
-               for tensor in tensors]
-
-    labels = load_tensor(label_path(path)).float().to(device)
-    tensors.append(labels)
+    idxs = [idx for idx, weights, n in tuples]
+    weights = [weights for idx, weights, n in tuples]
+    n_features = [n for idx, weights, n in tuples]
+    labels = load_tensor(label_path(path), device=device).float()
+    tensors = idxs + weights + [labels]
 
     return tensors, n_features
 
 
-def get_packer(column_configs):
-    idx = 0
-    col_packers = []
-    for cfg in column_configs:
-        packer, idx = cfg.get_packer(idx)
-        col_packers.append(packer)
-    col_packers.append(lambda ts: ts[idx].squeeze())  # label packer
-
-    def packer(ts):
-        return [pack(ts) for pack in col_packers]
-
-    return packer
+def make_input(batch):
+    n_fields = len(batch) // 2
+    idxs = batch[:n_fields]
+    weights = batch[n_fields:-1]
+    labels = batch[-1].squeeze(-1)
+    return idxs, weights, labels
 
 
-def train_epoch(tensors, tensor_packer, model, criterion, optim, batch_size, epoch_number=None):
+def train_epoch(tensors, model, criterion, optim, batch_size, epoch_number=None):
     epoch_n = 0
     epoch_loss = 0.
     label_sum = 0.
     pred_sum = 0.
     with tqdm_len(BatchIter(*tensors, batch_size=batch_size)) as epoch_iter:
         for i, batch in enumerate(epoch_iter, start=1):
-            *features, label = tensor_packer(batch)
-            pred = model(features)
+            idxs, weights, label = make_input(batch)
+            pred = model(idxs, weights)
             loss = criterion(pred, label)
 
             optim.zero_grad()
             loss.backward()
             optim.step()
 
-            n_batch = label.numel()
-            epoch_n += n_batch
-            epoch_loss += loss.item() * n_batch
-            label_sum += label.sum().item()
-            pred_sum += torch.sigmoid(pred.detach()).sum().item()
+            with torch.no_grad():
+                n_batch = label.numel()
+                epoch_n += n_batch
+                epoch_loss += loss * n_batch
+                label_sum += label.sum()
+                pred_sum += torch.sigmoid(pred).sum()
 
             if i % 200 == 0:
-                desc = f'train loss = {epoch_loss / epoch_n: .4f}, ' + \
-                       f'CTR = {label_sum / epoch_n: .4f}, ' + \
-                       f'pCTR = {pred_sum / epoch_n: .4f}, ' + \
+                desc = f'train loss = {epoch_loss.item() / epoch_n: .4f}, ' + \
+                       f'CTR = {label_sum.item() / epoch_n: .4f}, ' + \
+                       f'pCTR = {pred_sum.item() / epoch_n: .4f}, ' + \
                        f'bias = {model.bias.item(): .4f}'
                 if epoch_number is not None:
                     desc = f'Epoch {1 + epoch_number}, ' + desc
@@ -124,35 +95,36 @@ def train_epoch(tensors, tensor_packer, model, criterion, optim, batch_size, epo
             if i > args.n_batches:
                 break
 
-    return epoch_loss / epoch_n
+    return epoch_loss.item() / epoch_n
 
 
 @torch.no_grad()
-def test_epoch(tensors, tensor_packer, model, criterion, batch_size, set_name='validation', epoch_number=None):
+def test_epoch(tensors, model, criterion, batch_size, set_name='validation', epoch_number=None):
     epoch_n = 0
     epoch_loss = 0.
     label_sum = 0.
     pred_sum = 0.
     with tqdm_len(BatchIter(*tensors, batch_size=batch_size)) as epoch_iter:
         for i, batch in enumerate(epoch_iter):
-            *features, label = tensor_packer(batch)
-            pred = model(features)
+            idxs, weights, label = make_input(batch)
+            pred = model(idxs, weights)
             loss = criterion(pred, label)
 
             n_batch = label.numel()
             epoch_n += n_batch
-            epoch_loss += loss.item() * n_batch
-            label_sum += label.sum().item()
-            pred_sum += torch.sigmoid(pred.detach()).sum().item()
+            epoch_loss += loss * n_batch
+            label_sum += label.sum()
+            pred_sum += torch.sigmoid(pred).sum()
+            
+            if i % 50 == 0:
+                desc = f'{set_name} loss = {epoch_loss.item() / epoch_n: .4f}, ' + \
+                       f'CTR = {label_sum.item() / epoch_n: .4f}, ' + \
+                       f'pCTR = {pred_sum.item() / epoch_n: .4f}, '
+                if epoch_number is not None:
+                    desc = f'Epoch {1 + epoch_number}, ' + desc
+                epoch_iter.set_description(desc)
 
-            desc = f'{set_name} loss = {epoch_loss / epoch_n: .4f}, ' + \
-                   f'CTR = {label_sum / epoch_n: .4f}, ' + \
-                   f'pCTR = {pred_sum / epoch_n: .4f}, '
-            if epoch_number is not None:
-                desc = f'Epoch {1 + epoch_number}, ' + desc
-            epoch_iter.set_description(desc)
-
-    return epoch_loss / epoch_n
+    return epoch_loss.item() / epoch_n
 
 
 if __name__ == '__main__':
@@ -163,8 +135,9 @@ if __name__ == '__main__':
     parser.add_argument("--n_epochs", type=int, default=20, help='number of training epochs')
     parser.add_argument("--n_batches", type=int, default=2 ** 31,
                         help='limit on the number of mini-batches used in each training epoch')
+    parser.add_argument("--splines", type=bool, default=False, help='Weather to use splines')
     parser.add_argument("--degrees", nargs="+", type=int, default=[0], help='Spline degrees to try')
-    parser.add_argument("--emb_dims", nargs="*", type=int, default=[8], help='Embedding dimensions to try')
+    parser.add_argument("--emb_dims", nargs="*", type=int, default=[16], help='Embedding dimensions to try')
     parser.add_argument("--seeds", nargs="+", type=int, default=[42], help='Random seeds to try')
     parser.add_argument("--force_params", type=str, default='', help='force parameters for debugging')
     parser.add_argument("--study_name", type=str, default='criteo', help='name of the optuna study')
@@ -180,8 +153,8 @@ if __name__ == '__main__':
     print('Using device ', device)
 
 
-    def get_column_config(degree):
-        if degree > 0:
+    def get_column_config(splines, degree):
+        if splines:
             column_configs = \
                 [CatColumnConfig(col) for col in cat_cols] + \
                 [IntColumnConfig(col) for col in int_cols if (col not in spline_cols)] + \
@@ -194,7 +167,7 @@ if __name__ == '__main__':
         return column_configs
 
 
-    def fit_model(lr, l2reg, n_epochs, degree, emb_dim, random_seed, callback=None):
+    def fit_model(lr, l2reg, n_epochs, splines, degree, emb_dim, random_seed, callback=None):
         train_batch_size = args.train_batch_size
         val_batch_size = args.val_batch_size
         print({k: v for k, v in locals().items() if k != 'callback'})
@@ -202,15 +175,14 @@ if __name__ == '__main__':
         torch.manual_seed(random_seed)
         torch.cuda.manual_seed_all(random_seed)
 
-        column_configs = get_column_config(degree)
+        column_configs = get_column_config(splines, degree)
         train_tensors, n_features = load_dataset(column_configs, out_train_path, device=device)
         val_tensors, _ = load_dataset(column_configs, out_val_path, device=device)
         test_tensors, _ = load_dataset(column_configs, out_test_path, device=device)
-        tensor_packer = get_packer(column_configs)
 
-        model = FWFM(emb_dim, n_features)
+        model = FwFM(emb_dim, n_features)
         model = model.to(device)
-        optim = torch.optim.Adam(
+        optim = torch.optim.AdamW(
             [
                 {'params': model.bias, 'weight_decay': 0.},
                 {'params': model.nonbias_parameters(), 'weight_decay': l2reg}
@@ -220,10 +192,10 @@ if __name__ == '__main__':
         val_losses = []
         test_losses = []
         for epoch in range(n_epochs):
-            train_epoch(train_tensors, tensor_packer, model, criterion, optim, train_batch_size, epoch_number=epoch)
-            val_loss = test_epoch(val_tensors, tensor_packer, model, criterion, val_batch_size, epoch_number=epoch,
+            train_epoch(train_tensors, model, criterion, optim, train_batch_size, epoch_number=epoch)
+            val_loss = test_epoch(val_tensors, model, criterion, val_batch_size, epoch_number=epoch,
                                   set_name='validation')
-            test_loss = test_epoch(test_tensors, tensor_packer, model, criterion, val_batch_size, epoch_number=epoch,
+            test_loss = test_epoch(test_tensors, model, criterion, val_batch_size, epoch_number=epoch,
                                    set_name='test')
             val_losses.append(val_loss)
             test_losses.append(test_loss)
@@ -241,15 +213,16 @@ if __name__ == '__main__':
     def optuna_objective(trial: optuna.Trial):
         lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
         l2reg = trial.suggest_float('l2reg', 1e-8, 1e-3, log=True)
-        if len(args.emb_dims) > 0:
-            emb_dim = trial.suggest_categorical('emb_dim', args.emb_dims)
+        if len(args.emb_dims) > 1:
+            emb_dim = trial.suggest_categorical('emb_dim', list(args.emb_dims))
         else:
-            emb_dim = trial.suggest_int('emb_dim', 2, 40)
+            emb_dim = args.emb_dims[0]
         random_seed = trial.suggest_categorical('random_seed', args.seeds)
         n_epochs = args.n_epochs
-        degree = trial.suggest_categorical('degree', args.degrees)
+        degree = trial.suggest_categorical('degree', list(args.degrees))
+        splines = args.splines
 
-        val_losses, test_losses = fit_model(lr, l2reg, n_epochs, degree, emb_dim, random_seed)
+        val_losses, test_losses = fit_model(lr, l2reg, n_epochs, splines, degree, emb_dim, random_seed)
         best_epoch = np.argmin(val_losses)
 
         trial.set_user_attr('best_epoch', int(best_epoch))

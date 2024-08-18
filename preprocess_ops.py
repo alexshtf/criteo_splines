@@ -42,6 +42,6 @@ def save_tensor(path, data):
         torch.save(data, f)
 
 
-def load_tensor(path):
+def load_tensor(path, device=None):
     with lz4.frame.open(path, 'rb') as f:
-        return torch.load(f)
+        return torch.load(f, map_location=device)

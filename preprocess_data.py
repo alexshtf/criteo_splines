@@ -1,32 +1,37 @@
-import pandas as pd
+import polars as pl
 import numpy as np
 import lz4.frame
 
 from column_transforms import (
     transform_label,
-    IntColTransformer,
-    CatColTransformer,
-    SplineColTransformer)
+    IntTransformer,
+    CatTransformer,
+    SplineTransformer,
+    ColTransformer)
 from config import (
-    int_cols, cat_cols, columns,
+    int_cols, cat_cols, spline_cols, columns,
     split_fractions,
-    int_transform_config, spline_transform_config, cat_transform_config,
+    transform_config,
     out_train_path, out_val_path, out_test_path,
-    knot_counts,
     degrees)
 from preprocess_ops import split_df, label_path, cat_col_path, int_col_path, spline_col_path, save_tensor
 
 
 def load_dataset(data_file):
     print(f'Loading data from {data_file}')
-    dtypes = {'label': np.int8} | \
-             {col: pd.Int32Dtype() for col in int_cols} | \
-             {col: str for col in cat_cols}
     with lz4.frame.open(data_file, 'rb') as f:
-        df = pd.read_csv(f, sep='\t', header=None, names=columns, dtype=dtypes, engine='pyarrow')
+        df = pl.read_csv(f, separator='\t', has_header=False, new_columns=columns)
 
     print(f'Splitting into train, validation, and test')
-    return split_df(df, split_fractions)
+    shuffled_df = df.sample(fraction=1., shuffle=True, seed=42)
+
+    split_sizes = np.rint(np.array(split_fractions) * len(df)).astype(np.int32)
+    train_df = shuffled_df.head(split_sizes[0])
+    remain_df = shuffled_df.tail(-split_sizes[0])
+    valid_df = remain_df.head(split_sizes[1])
+    test_df = remain_df.tail(-split_sizes[1])
+    
+    return train_df, valid_df, test_df
 
 
 train, val, test = load_dataset('train.txt.lz4')
@@ -41,29 +46,31 @@ save_tensor(label_path(out_train_path), tr_label)
 save_tensor(label_path(out_val_path), val_label)
 save_tensor(label_path(out_test_path), test_label)
 
-print('Transforming spline columsn with config ', spline_transform_config)
-for col_name in spline_transform_config['configs']:
+print('Using config = ', str(transform_config))
+
+print('Transforming spline columsn with config ', spline_cols)
+for col_name in spline_cols:
     for degree in degrees:
         print(f'Transforming SPLINE column {col_name} of degree {degree}')
-        tr = SplineColTransformer(col_name, config=spline_transform_config, degree=degree)
+        tr = ColTransformer(col_name, SplineTransformer(degree=degree, **transform_config))
         tr.fit(train)
         save_tensor(spline_col_path(out_train_path, col_name, degree), tr.transform(train))
         save_tensor(spline_col_path(out_val_path, col_name, degree), tr.transform(val))
         save_tensor(spline_col_path(out_test_path, col_name, degree), tr.transform(test))
 
-print('Transforming integer columns with config: ', int_transform_config)
+print('Transforming integer columns')
 for col_name in int_cols:
     print(f'Transforming INTEGER column {col_name}')
-    tr = IntColTransformer(col_name, **int_transform_config)
+    tr = ColTransformer(col_name, IntTransformer(**transform_config))
     tr.fit(train)
     save_tensor(int_col_path(out_train_path, col_name), tr.transform(train))
     save_tensor(int_col_path(out_val_path, col_name), tr.transform(val))
     save_tensor(int_col_path(out_test_path, col_name), tr.transform(test))
 
-print('Transforming categorical columns with config ', cat_transform_config)
+print('Transforming categorical columns')
 for col_name in cat_cols:
     print(f'Transforming CATEGORICAL column {col_name}')
-    tr = CatColTransformer(col_name, **cat_transform_config)
+    tr = ColTransformer(col_name, CatTransformer(**transform_config))
     tr.fit(train)
     save_tensor(cat_col_path(out_train_path, col_name), tr.transform(train))
     save_tensor(cat_col_path(out_val_path, col_name), tr.transform(val))
