@@ -19,8 +19,7 @@ class IntColumnScaler:
         
     def fit(self, col):
         col = np.arcsinh(col)
-        max_val = np.max(np.ravel(col))
-        self.scale_ = max_val / 2
+        self.scale_ = 3 * np.std(np.ravel(col))
         return self
     
     def transform(self, col):

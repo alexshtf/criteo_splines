@@ -132,7 +132,7 @@ if __name__ == '__main__':
     parser.add_argument("--gpu", type=int, default=0, help='which GPU to use')
     parser.add_argument("--train_batch_size", type=int, default=1024, help='batch size used for training')
     parser.add_argument("--val_batch_size", type=int, default=8192, help='batch size used on the validation set')
-    parser.add_argument("--n_epochs", type=int, default=20, help='number of training epochs')
+    parser.add_argument("--n_epochs", type=int, default=10, help='number of training epochs')
     parser.add_argument("--n_batches", type=int, default=2 ** 31,
                         help='limit on the number of mini-batches used in each training epoch')
     parser.add_argument("--splines", type=bool, default=False, help='Weather to use splines')

@@ -1,11 +1,11 @@
 transform_config = {
     'at_least': 0,
     'min_frequency': 10,
-    'n_knots': 50
+    'n_knots': 30
 }
 
 int_cols = [f'I_{1 + i}' for i in range(13)]
-spline_cols = ['I_2', 'I_3', 'I_4', 'I_5', 'I_6', 'I_7', 'I_9', 'I_13']
+spline_cols = ['I_2', 'I_5', 'I_6', 'I_9']
 cat_cols = [f'C_{1 + i}' for i in range(26)]
 columns = ['label'] + int_cols + cat_cols
 degrees = [0, 3]
