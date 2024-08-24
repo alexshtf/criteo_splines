@@ -18,14 +18,15 @@ class IntColumnScaler:
         self.at_least = at_least
         
     def fit(self, col):
-        col = np.arcsinh(col)
-        self.scale_ = 3 * np.std(np.ravel(col))
+        n = len(col)
+        mean = np.mean(col)
+        sum_squares = np.sum(np.square(col))
+        self.lomax_shape_ =  (2 * n * mean * mean) / (sum_squares) + 2
+        self.lomax_scale_ = mean * (self.lomax_shape_ - 1)
         return self
-    
+
     def transform(self, col):
-        col = np.arcsinh(col)
-        col /= self.scale_
-        return scipy.special.erf(col / np.sqrt(2))
+        return 1 - np.power(1 + col / self.lomax_scale_, -self.lomax_shape_)
 
 
 class SplineTransformer:
@@ -48,7 +49,7 @@ class SplineTransformer:
         self.discrete_keys_ = self.get_discrete_(col).extend_constant(None, 1).unique().to_list()
         self.discrete_values_ = list(range(len(self.discrete_keys_)))
         self.n_discrete_ = len(self.discrete_keys_)
-        self.scaler.fit(self.get_continuous_(col))  
+        self.scaler.fit(self.get_continuous_(col).to_numpy())  
         return self
     
     def transform(self, col):

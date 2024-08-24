@@ -23,7 +23,8 @@ def load_dataset(data_file):
         df = pl.read_csv(f, separator='\t', has_header=False, new_columns=columns)
 
     print(f'Splitting into train, validation, and test')
-    shuffled_df = df.sample(fraction=1., shuffle=True, seed=42)
+    # shuffled_df = df.sample(fraction=1., shuffle=True, seed=42)
+    shuffled_df = df
 
     split_sizes = np.rint(np.array(split_fractions) * len(df)).astype(np.int32)
     train_df = shuffled_df.head(split_sizes[0])

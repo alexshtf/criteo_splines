@@ -1,7 +1,7 @@
 #!/bin/sh
 
-emb_dim=10
-gpus=(0 1 2)
+emb_dim=40
+gpus=(3 4 5)
 session_name=splines_${emb_dim}
 
 tmux new-session -d -s $session_name "python3 train.py --gpu ${gpus[0]} --study_name criteo_bins_${emb_dim} --emb_dims ${emb_dim}"

@@ -1,7 +1,7 @@
 transform_config = {
     'at_least': 0,
     'min_frequency': 10,
-    'n_knots': 30
+    'n_knots': 50
 }
 
 int_cols = [f'I_{1 + i}' for i in range(13)]
