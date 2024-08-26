@@ -23,16 +23,14 @@ def load_dataset(data_file):
         df = pl.read_csv(f, separator='\t', has_header=False, new_columns=columns)
 
     print(f'Splitting into train, validation, and test')
-    # shuffled_df = df.sample(fraction=1., shuffle=True, seed=42)
-    shuffled_df = df
-
     split_sizes = np.rint(np.array(split_fractions) * len(df)).astype(np.int32)
-    train_df = shuffled_df.head(split_sizes[0])
-    remain_df = shuffled_df.tail(-split_sizes[0])
-    valid_df = remain_df.head(split_sizes[1])
-    test_df = remain_df.tail(-split_sizes[1])
-    
-    return train_df, valid_df, test_df
+    parts = []
+    offset = 0
+    for sz in split_sizes:
+        part = df.slice(offset, sz)
+        offset += sz
+        parts.append(part)    
+    return tuple(parts)
 
 
 train, val, test = load_dataset('train.txt.lz4')

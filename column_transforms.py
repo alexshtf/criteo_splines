@@ -19,14 +19,14 @@ class IntColumnScaler:
         
     def fit(self, col):
         n = len(col)
-        mean = np.mean(col)
-        sum_squares = np.sum(np.square(col))
-        self.lomax_shape_ =  (2 * n * mean * mean) / (sum_squares) + 2
-        self.lomax_scale_ = mean * (self.lomax_shape_ - 1)
+        self.col_max_ = np.quantile(col, 0.99)
         return self
-
+    
     def transform(self, col):
-        return 1 - np.power(1 + col / self.lomax_scale_, -self.lomax_shape_)
+        col = np.clip(col, a_min=self.at_least, a_max=self.col_max_)
+        col = np.square(np.arcsinh(col))
+        scale_max = np.square(np.arcsinh(self.col_max_))
+        return col / scale_max
 
 
 class SplineTransformer:
