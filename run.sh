@@ -1,11 +1,12 @@
 #!/bin/sh
 
-emb_dim=48
-gpus=(3 4 5)
+emb_dim=32
+gpus=(0 1 2)
 session_name=splines_${emb_dim}
 n_epochs=10
 common_args="--n_epochs ${n_epochs}  --emb_dims ${emb_dim}"
 
+tmux kill-session -t $session_name
 tmux new-session -d -s $session_name \
     "python3 train.py ${common_args} --gpu ${gpus[0]} --study_name criteo_bins_${emb_dim}"
 tmux split-window -v \
