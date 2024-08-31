@@ -1,7 +1,7 @@
 #!/bin/sh
 
-emb_dim=32
-gpus=(0 1 2)
+emb_dim=48
+gpus=(3 4 5)
 session_name=splines_${emb_dim}
 n_epochs=10
 common_args="--n_epochs ${n_epochs}  --emb_dims ${emb_dim}"
